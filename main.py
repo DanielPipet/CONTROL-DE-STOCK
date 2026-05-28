@@ -14,7 +14,6 @@ CONTRASENA = "control2026"
 
 st.set_page_config(page_title="Control de Stock", page_icon="📦", layout="wide")
 
-# Inicializamos el manejador de cookies para persistencia de sesión sin decorador de caché
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -35,68 +34,102 @@ supabase = init_supabase()
 # HELPERS — CATEGORÍAS
 # ─────────────────────────────────────────────
 def get_categorias():
-    response = supabase.table("categorias").select("*").order("nombre").execute()
-    if response.data:
-        return pd.DataFrame(response.data)
+    try:
+        response = supabase.table("categorias").select("*").order("nombre").execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+    except:
+        pass
     return pd.DataFrame(columns=["id", "nombre"])
 
 def agregar_categoria(nombre):
-    nombre_limpio = nombre.strip()
-    check = supabase.table("categorias").select("id").eq("nombre", nombre_limpio).execute()
-    if not check.data:
-        supabase.table("categorias").insert({"nombre": nombre_limpio}).execute()
+    nombre_limpio = str(nombre).strip()
+    if not nombre_limpio or nombre_limpio.lower() in ("none", "nan", ""):
+        return
+    try:
+        check = supabase.table("categorias").select("id").eq("nombre", nombre_limpio).execute()
+        if not check.data:
+            supabase.table("categorias").insert({"nombre": nombre_limpio}).execute()
+    except:
+        pass
 
 def eliminar_categoria(cat_id):
-    supabase.table("categorias").delete().eq("id", cat_id).execute()
+    try:
+        supabase.table("categorias").delete().eq("id", cat_id).execute()
+    except:
+        pass
 
 # ─────────────────────────────────────────────
-# HELPERS — PRODUCTOS
+# HELPERS — PRODUCTOS (BLINDADOS ANTI-NONE)
 # ─────────────────────────────────────────────
 def get_productos():
-    response = supabase.table("productos").select("*").order("descripcion").execute()
-    if response.data:
-        return pd.DataFrame(response.data)
+    try:
+        response = supabase.table("productos").select("*").order("descripcion").execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+    except:
+        pass
     return pd.DataFrame(columns=["cod_prod", "descripcion", "categoria", "valor_unitario", "cantidad"])
 
 def get_producto(cod):
-    cod = str(cod).strip()
-    if not cod or cod in ("nan", "None", ""):
+    cod_limpio = str(cod).strip()
+    # Si viene un código basura, nulo o vacío, frenamos antes de consultar a Supabase
+    if not cod_limpio or cod_limpio.lower() in ("nan", "none", ""):
         return None
-    response = supabase.table("productos").select("*").eq("cod_prod", cod).execute()
-    return response.data[0] if response.data else None
+    try:
+        response = supabase.table("productos").select("*").eq("cod_prod", cod_limpio).execute()
+        return response.data[0] if response.data else None
+    except:
+        return None
 
 def get_producto_by_nombre(nombre):
-    nombre = str(nombre).strip()
-    if not nombre or nombre in ("nan", "None", ""):
+    nombre_limpio = str(nombre).strip()
+    # Evitamos que busque "None" en la base de datos
+    if not nombre_limpio or nombre_limpio.lower() in ("nan", "none", ""):
         return None
-    response = supabase.table("productos").select("*").ilike("descripcion", nombre).execute()
-    return response.data[0] if response.data else None
+    try:
+        response = supabase.table("productos").select("*").ilike("descripcion", nombre_limpio).execute()
+        return response.data[0] if response.data else None
+    except:
+        return None
 
 def agregar_producto(cod, desc, cat, precio, cantidad):
-    supabase.table("productos").insert({
-        "cod_prod": str(cod).strip(),
-        "descripcion": str(desc).strip(),
-        "categoria": str(cat).strip(),
-        "valor_unitario": float(precio),
-        "cantidad": int(cantidad)
-    }).execute()
+    try:
+        supabase.table("productos").insert({
+            "cod_prod": str(cod).strip(),
+            "descripcion": str(desc).strip(),
+            "categoria": str(cat).strip(),
+            "valor_unitario": float(precio),
+            "cantidad": int(cantidad)
+        }).execute()
+    except:
+        pass
 
 def editar_producto(cod, desc, cat, precio, cantidad):
-    supabase.table("productos").update({
-        "descripcion": str(desc).strip(),
-        "categoria": str(cat).strip(),
-        "valor_unitario": float(precio),
-        "cantidad": int(cantidad)
-    }).eq("cod_prod", str(cod).strip()).execute()
+    try:
+        supabase.table("productos").update({
+            "descripcion": str(desc).strip(),
+            "categoria": str(cat).strip(),
+            "valor_unitario": float(precio),
+            "cantidad": int(cantidad)
+        }).eq("cod_prod", str(cod).strip()).execute()
+    except:
+        pass
 
 def actualizar_stock(cod, delta):
     prod = get_producto(cod)
     if prod:
         nueva_cantidad = int(prod["cantidad"]) + int(delta)
-        supabase.table("productos").update({"cantidad": nueva_cantidad}).eq("cod_prod", cod).execute()
+        try:
+            supabase.table("productos").update({"cantidad": nueva_cantidad}).eq("cod_prod", cod).execute()
+        except:
+            pass
 
 def actualizar_precio(cod, nuevo_precio):
-    supabase.table("productos").update({"valor_unitario": float(nuevo_precio)}).eq("cod_prod", cod).execute()
+    try:
+        supabase.table("productos").update({"valor_unitario": float(nuevo_precio)}).eq("cod_prod", cod).execute()
+    except:
+        pass
 
 def upsert_producto(cod, desc, cat, precio, stock_delta):
     prod = get_producto(cod)
@@ -104,42 +137,51 @@ def upsert_producto(cod, desc, cat, precio, stock_delta):
         agregar_producto(cod, desc, cat, precio, stock_delta)
     else:
         nueva_cantidad = int(prod["cantidad"]) + int(stock_delta)
-        supabase.table("productos").update({
-            "descripcion": str(desc).strip(),
-            "categoria": str(cat).strip(),
-            "valor_unitario": float(precio),
-            "cantidad": nueva_cantidad
-        }).eq("cod_prod", cod).execute()
+        try:
+            supabase.table("productos").update({
+                "descripcion": str(desc).strip(),
+                "categoria": str(cat).strip(),
+                "valor_unitario": float(precio),
+                "cantidad": nueva_cantidad
+            }).eq("cod_prod", cod).execute()
+        except:
+            pass
 
 # ─────────────────────────────────────────────
 # HELPERS — OPERACIONES
 # ─────────────────────────────────────────────
 def registrar_operacion(id_op, tipo, fecha, cod, desc, cat, cantidad, precio, subtotal, factura, obs):
-    supabase.table("operaciones").insert({
-        "id_operacion": id_op,
-        "tipo": tipo,
-        "fecha": str(fecha),
-        "cod_prod": cod,
-        "descripcion": desc,
-        "categoria": cat,
-        "cantidad": int(cantidad),
-        "precio_unitario": float(precio),
-        "subtotal": float(subtotal),
-        "con_factura": 1 if factura else 0,
-        "observaciones": obs
-    }).execute()
+    try:
+        supabase.table("operaciones").insert({
+            "id_operacion": id_op,
+            "tipo": tipo,
+            "fecha": str(fecha),
+            "cod_prod": cod,
+            "descripcion": desc,
+            "categoria": cat,
+            "cantidad": int(cantidad),
+            "precio_unitario": float(precio),
+            "subtotal": float(subtotal),
+            "con_factura": 1 if factura else 0,
+            "observaciones": obs
+        }).execute()
+    except:
+        pass
 
 def get_operaciones():
-    response = supabase.table("operaciones").select("*").order("fecha", desc=True).execute()
-    if response.data:
-        return pd.DataFrame(response.data)
+    try:
+        response = supabase.table("operaciones").select("*").order("fecha", desc=True).execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+    except:
+        pass
     return pd.DataFrame(columns=[
         "id", "id_operacion", "tipo", "fecha", "cod_prod", "descripcion", 
         "categoria", "cantidad", "precio_unitario", "subtotal", "con_factura", "observaciones"
     ])
 
 # ─────────────────────────────────────────────
-# CONTROLADOR DE PLANILLA
+# CONTROLADOR DE PLANILLA (MÁXIMA DESINFECCIÓN)
 # ─────────────────────────────────────────────
 EMPTY_OP_ROW = {
     "COD_PROD": "", "PRODUCTO": "", "CANTIDAD": 1,
@@ -148,6 +190,14 @@ EMPTY_OP_ROW = {
 
 def new_op_df():
     return pd.DataFrame([EMPTY_OP_ROW.copy()])
+
+def limpiar_valores_none(val):
+    if pd.isna(val) or val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() in ("none", "nan", ""):
+        return ""
+    return s
 
 def callback_planilla(suffix: str):
     state_key = f"op_editor_{suffix}"
@@ -159,23 +209,30 @@ def callback_planilla(suffix: str):
     edits = st.session_state[state_key]
     df = st.session_state[df_key].copy()
 
-    # Procesamos nuevas filas agregadas por el usuario
+    # 1. Filas agregadas dinámicamente por el usuario
     for row in edits.get("added_rows", []):
         new_row = EMPTY_OP_ROW.copy()
-        new_row.update(row)
+        # Desinfectamos cualquier valor que el diccionario nuevo traiga por defecto
+        cleaned_row = {k: (limpiar_valores_none(v) if k in ("COD_PROD", "PRODUCTO") else v) for k, v in row.items()}
+        new_row.update(cleaned_row)
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
-    # Procesamos las ediciones de celdas
+    # 2. Ediciones sobre celdas existentes
     for idx_str, column_changes in edits.get("edited_rows", {}).items():
         idx = int(idx_str)
-        for col, val in column_changes.items():
-            df.at[idx, col] = val
         
-        cod = str(df.at[idx, "COD_PROD"]).strip()
-        val_prod = df.at[idx, "PRODUCTO"]
-        nombre = str(val_prod).strip() if pd.notna(val_prod) and str(val_prod).strip() not in ("None", "") else ""
+        # Guardamos los cambios desinfectando textos al vuelo
+        for col, val in column_changes.items():
+            if col in ("COD_PROD", "PRODUCTO"):
+                df.at[idx, col] = limpiar_valores_none(val)
+            else:
+                df.at[idx, col] = val
+        
+        cod = limpiar_valores_none(df.at[idx, "COD_PROD"])
+        nombre = limpiar_valores_none(df.at[idx, "PRODUCTO"])
 
         prod = None
+        # Solo consultamos si las variables no quedaron vacías tras la desinfección
         if "COD_PROD" in column_changes and cod:
             prod = get_producto(cod)
         elif "PRODUCTO" in column_changes and nombre:
@@ -185,17 +242,23 @@ def callback_planilla(suffix: str):
             df.at[idx, "COD_PROD"] = str(prod["cod_prod"])
             df.at[idx, "PRODUCTO"] = str(prod["descripcion"])
             df.at[idx, "PRECIO_UNITARIO"] = float(prod["valor_unitario"])
+        else:
+            # Si borró el código o el producto, reseteamos los datos de esa fila
+            if not cod and not nombre:
+                df.at[idx, "COD_PROD"] = ""
+                df.at[idx, "PRODUCTO"] = ""
+                df.at[idx, "PRECIO_UNITARIO"] = 0.0
 
-        cant = df.at[idx, "CANTIDAD"]
         try:
-            cant = max(int(cant), 1)
+            cant = max(int(df.at[idx, "CANTIDAD"]), 1)
         except:
             cant = 1
         df.at[idx, "CANTIDAD"] = cant
+        
         precio = float(df.at[idx, "PRECIO_UNITARIO"])
         df.at[idx, "TOTAL"] = round(cant * precio, 2)
 
-    # Procesamos eliminaciones
+    # 3. Procesamos eliminaciones
     deleted_indices = edits.get("deleted_rows", [])
     if deleted_indices:
         df = df.drop(deleted_indices).reset_index(drop=True)
@@ -203,9 +266,9 @@ def callback_planilla(suffix: str):
     if df.empty:
         df = new_op_df()
 
-    # BLINDAJE ANTI-NONE: Limpieza agresiva antes de devolver el DataFrame al estado
-    df["COD_PROD"] = df["COD_PROD"].fillna("").astype(str).str.replace("None", "", case=False).str.strip()
-    df["PRODUCTO"] = df["PRODUCTO"].fillna("").astype(str).str.replace("None", "", case=False).str.strip()
+    # Desinfección forzada absoluta final en toda la estructura del DataFrame
+    df["COD_PROD"] = df["COD_PROD"].apply(limpiar_valores_none)
+    df["PRODUCTO"] = df["PRODUCTO"].apply(limpiar_valores_none)
 
     st.session_state[df_key] = df
 
@@ -216,8 +279,8 @@ def build_op_col_config():
         "COD_PROD":        st.column_config.TextColumn("Código",            width="small"),
         "PRODUCTO":        st.column_config.SelectboxColumn("Producto",      options=opciones_prod, width="large"),
         "CANTIDAD":        st.column_config.NumberColumn("Cantidad",         min_value=1, step=1, width="small"),
-        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="%.2f", width="medium"),
-        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="%.2f", width="medium"),
+        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="$%.2f", width="medium"),
+        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="$%.2f", width="medium"),
         "OBSERVACIONES":   st.column_config.TextColumn("Observaciones",      width="medium"),
     }
 
@@ -297,9 +360,9 @@ if seccion == "🛒 OPERACIONES":
         st.markdown("---")
         st.caption("✏️ Seleccioná el **Producto** desde el menú desplegable o escribí el **Código** — los totales se calculan al instante.")
 
-        # Forzado preventivo antes de renderizar la UI por si acaso
-        st.session_state[df_key]["COD_PROD"] = st.session_state[df_key]["COD_PROD"].fillna("").astype(str).str.replace("None", "", case=False)
-        st.session_state[df_key]["PRODUCTO"] = st.session_state[df_key]["PRODUCTO"].fillna("").astype(str).str.replace("None", "", case=False)
+        # Desinfección preventiva agresiva antes de pintar la UI
+        st.session_state[df_key]["COD_PROD"] = st.session_state[df_key]["COD_PROD"].apply(limpiar_valores_none)
+        st.session_state[df_key]["PRODUCTO"] = st.session_state[df_key]["PRODUCTO"].apply(limpiar_valores_none)
 
         st.data_editor(
             st.session_state[df_key],
@@ -353,7 +416,7 @@ if seccion == "🛒 OPERACIONES":
                 cant  = int(row["CANTIDAD"])
                 prec  = float(row["PRECIO_UNITARIO"])
                 tot   = float(row["TOTAL"])
-                obs   = str(row["OBSERVACIONES"]) if str(row["OBSERVACIONES"]) not in ("nan","None","") else ""
+                obs   = str(row["OBSERVACIONES"]) if str(row["OBSERVACIONES"]).strip().lower() not in ("nan","none","") else ""
                 
                 prod  = get_producto(cod)
                 cat   = str(prod["categoria"]) if prod is not None else ""
@@ -451,8 +514,8 @@ elif seccion == "📊 HISTORIAL":
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "Precio Unitario": st.column_config.NumberColumn(format="%.2f"),
-                "Subtotal": st.column_config.NumberColumn(format="%.2f")
+                "Precio Unitario": st.column_config.NumberColumn(format="$%.2f"),
+                "Subtotal": st.column_config.NumberColumn(format="$%.2f")
             }
         )
         
@@ -509,7 +572,7 @@ elif seccion == "📋 INVENTARIO":
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "Precio Unitario": st.column_config.NumberColumn(format="%.2f")
+                    "Precio Unitario": st.column_config.NumberColumn(format="$%.2f")
                 }
             )
 
