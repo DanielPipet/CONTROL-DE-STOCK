@@ -15,7 +15,6 @@ CONTRASENA = "control2026"
 st.set_page_config(page_title="Control de Stock", page_icon="📦", layout="wide")
 
 # Inicializamos el manejador de cookies para persistencia de sesión
-@st.cache_resource
 def get_cookie_manager():
     return stx.CookieManager()
 
