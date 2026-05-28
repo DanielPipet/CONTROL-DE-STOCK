@@ -141,7 +141,6 @@ def get_operaciones():
 # ─────────────────────────────────────────────
 # CONTROLADOR DE PLANILLA
 # ─────────────────────────────────────────────
-# Cambiamos None por texto vacío "" para erradicar el texto flotante indeseado
 EMPTY_OP_ROW = {
     "COD_PROD": "", "PRODUCTO": "", "CANTIDAD": 1,
     "PRECIO_UNITARIO": 0.0, "TOTAL": 0.0, "OBSERVACIONES": ""
@@ -160,11 +159,13 @@ def callback_planilla(suffix: str):
     edits = st.session_state[state_key]
     df = st.session_state[df_key].copy()
 
+    # Procesamos nuevas filas agregadas por el usuario
     for row in edits.get("added_rows", []):
         new_row = EMPTY_OP_ROW.copy()
         new_row.update(row)
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
+    # Procesamos las ediciones de celdas
     for idx_str, column_changes in edits.get("edited_rows", {}).items():
         idx = int(idx_str)
         for col, val in column_changes.items():
@@ -194,12 +195,17 @@ def callback_planilla(suffix: str):
         precio = float(df.at[idx, "PRECIO_UNITARIO"])
         df.at[idx, "TOTAL"] = round(cant * precio, 2)
 
+    # Procesamos eliminaciones
     deleted_indices = edits.get("deleted_rows", [])
     if deleted_indices:
         df = df.drop(deleted_indices).reset_index(drop=True)
 
     if df.empty:
         df = new_op_df()
+
+    # BLINDAJE ANTI-NONE: Limpieza agresiva antes de devolver el DataFrame al estado
+    df["COD_PROD"] = df["COD_PROD"].fillna("").astype(str).str.replace("None", "", case=False).str.strip()
+    df["PRODUCTO"] = df["PRODUCTO"].fillna("").astype(str).str.replace("None", "", case=False).str.strip()
 
     st.session_state[df_key] = df
 
@@ -216,7 +222,7 @@ def build_op_col_config():
     }
 
 # ─────────────────────────────────────────────
-# SESSION STATE INITIALIZATION
+# INITIALIZE SESSION STATE
 # ─────────────────────────────────────────────
 defaults = {
     "logged_in":      False,
@@ -291,6 +297,10 @@ if seccion == "🛒 OPERACIONES":
         st.markdown("---")
         st.caption("✏️ Seleccioná el **Producto** desde el menú desplegable o escribí el **Código** — los totales se calculan al instante.")
 
+        # Forzado preventivo antes de renderizar la UI por si acaso
+        st.session_state[df_key]["COD_PROD"] = st.session_state[df_key]["COD_PROD"].fillna("").astype(str).str.replace("None", "", case=False)
+        st.session_state[df_key]["PRODUCTO"] = st.session_state[df_key]["PRODUCTO"].fillna("").astype(str).str.replace("None", "", case=False)
+
         st.data_editor(
             st.session_state[df_key],
             column_config=build_op_col_config(),
@@ -302,7 +312,7 @@ if seccion == "🛒 OPERACIONES":
         )
 
         current_df = st.session_state[df_key]
-        valid_rows = current_df[(current_df["COD_PROD"] != "") & (current_df["TOTAL"] > 0)]
+        valid_rows = current_df[(current_df["COD_PROD"] != "") & (current_df["PRODUCTO"] != "") & (current_df["TOTAL"] > 0)]
         total_general = valid_rows["TOTAL"].sum()
 
         col_tot, col_btn = st.columns([3, 1])
@@ -408,7 +418,6 @@ elif seccion == "📊 HISTORIAL":
         
     df_f = df_f.drop(columns=["_fecha_dt"], errors="ignore")
 
-    # Formateo manual regional para las métricas
     total_v = df_f[df_f['tipo']=='Venta']['subtotal'].sum()
     total_c = df_f[df_f['tipo']=='Compra']['subtotal'].sum()
     v_formateado = f"${total_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -437,7 +446,6 @@ elif seccion == "📊 HISTORIAL":
             "subtotal": "Subtotal", "con_factura": "Factura", "observaciones": "Observaciones"
         })
         
-        # Mostramos la tabla formateada visualmente en Streamlit
         st.dataframe(
             disp, 
             use_container_width=True, 
@@ -448,15 +456,12 @@ elif seccion == "📊 HISTORIAL":
             }
         )
         
-        # Generamos el archivo de Excel en memoria inyectando el formato contable nativo
         buf_hist = io.BytesIO()
         with pd.ExcelWriter(buf_hist, engine="openpyxl") as writer:
             disp.to_excel(writer, index=False, sheet_name="Historial")
-            
             workbook  = writer.book
             worksheet = writer.sheets["Historial"]
             formato_moneda = "$#,##0.00;($#,##0.00);\"-\";@" 
-            
             for row in range(2, len(disp) + 2):
                 worksheet[f"I{row}"].number_format = formato_moneda
                 worksheet[f"J{row}"].number_format = formato_moneda
@@ -499,7 +504,6 @@ elif seccion == "📋 INVENTARIO":
             column_order = ["Código", "Descripción", "Categoría", "Precio Unitario", "Stock"]
             disp_inv = disp_inv[[c for c in column_order if c in disp_inv.columns]]
             
-            # Formato visual correcto en la interfaz
             st.dataframe(
                 disp_inv, 
                 use_container_width=True, 
@@ -509,15 +513,12 @@ elif seccion == "📋 INVENTARIO":
                 }
             )
 
-            # Generamos Excel inyectando formato contable nativo
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 disp_inv.to_excel(writer, index=False, sheet_name="Inventario")
-                
                 workbook = writer.book
                 worksheet = writer.sheets["Inventario"]
                 formato_moneda = "$#,##0.00;($#,##0.00);\"-\";@"
-                
                 for row in range(2, len(disp_inv) + 2):
                     worksheet[f"D{row}"].number_format = formato_moneda
                     
