@@ -134,7 +134,7 @@ def registrar_operacion(id_op, tipo, fecha, cod, desc, cat, cantidad, precio, su
 
 def get_operaciones():
     # Traemos las operaciones ordenadas de forma descendente por fecha
-    response = supabase.table("operaciones").select("*").order("fecha", descending=True).execute()
+    response = supabase.table("operaciones").select("*").order("fecha", desc=True).execute()
     if response.data:
         return pd.DataFrame(response.data)
     return pd.DataFrame(columns=[
