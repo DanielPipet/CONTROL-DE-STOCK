@@ -757,11 +757,11 @@ elif seccion == "📋 INVENTARIO":
                 st.error(f"❌ Error al procesar el archivo: {ex}")
 
 # link temporal para limpiar la base
-if st.sidebar.button("🚨 LIMPIAR BASE DE DATOS (PRODUCCIÓN)"):
-    from supabase import create_client
-    s = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-    s.table("operaciones").delete().neq("id", -1).execute()
-    s.table("productos").delete().neq("cantidad", -999999).execute()
-    s.table("categorias").delete().neq("id", -1).execute()
-    st.sidebar.success("¡Base de datos limpia!")
-    st.balloons()
+#if st.sidebar.button("🚨 LIMPIAR BASE DE DATOS (PRODUCCIÓN)"):
+#    from supabase import create_client
+#    s = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+#    s.table("operaciones").delete().neq("id", -1).execute()
+#    s.table("productos").delete().neq("cantidad", -999999).execute()
+#    s.table("categorias").delete().neq("id", -1).execute()
+#    st.sidebar.success("¡Base de datos limpia!")
+#    st.balloons()
