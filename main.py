@@ -431,8 +431,18 @@ elif seccion == "📊 HISTORIAL":
             "subtotal": "Subtotal", "con_factura": "Factura", "observaciones": "Observaciones"
         })
         st.dataframe(disp, use_container_width=True, hide_index=True)
-        csv = disp.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Exportar a CSV", csv, "historial_operaciones.csv", "text/csv")
+        
+        # Generamos el archivo de Excel en memoria
+        buf_hist = io.BytesIO()
+        with pd.ExcelWriter(buf_hist, engine="openpyxl") as writer:
+            disp.to_excel(writer, index=False, sheet_name="Historial")
+            
+        st.download_button(
+            "📥 Exportar historial a Excel",
+            data=buf_hist.getvalue(),
+            file_name="historial_operaciones.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 # ══════════════════════════════════════════════
 # INVENTARIO
