@@ -14,7 +14,7 @@ CONTRASENA = "control2026"
 
 st.set_page_config(page_title="Control de Stock", page_icon="📦", layout="wide")
 
-# Inicializamos el manejador de cookies para persistencia de sesión
+# Inicializamos el manejador de cookies para persistencia de sesión sin decorador de caché
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -23,7 +23,6 @@ cookie_manager = get_cookie_manager()
 # ─────────────────────────────────────────────
 # CONEXIÓN CON SUPABASE
 # ─────────────────────────────────────────────
-# Los datos reales se leen de los Secrets de Streamlit de forma segura
 @st.cache_resource
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
@@ -33,7 +32,7 @@ def init_supabase():
 supabase = init_supabase()
 
 # ─────────────────────────────────────────────
-# HELPERS — CATEGORÍAS (MIGRADO A SUPABASE)
+# HELPERS — CATEGORÍAS
 # ─────────────────────────────────────────────
 def get_categorias():
     response = supabase.table("categorias").select("*").order("nombre").execute()
@@ -43,7 +42,6 @@ def get_categorias():
 
 def agregar_categoria(nombre):
     nombre_limpio = nombre.strip()
-    # Verificar si ya existe para evitar errores de restricción UNIQUE
     check = supabase.table("categorias").select("id").eq("nombre", nombre_limpio).execute()
     if not check.data:
         supabase.table("categorias").insert({"nombre": nombre_limpio}).execute()
@@ -52,7 +50,7 @@ def eliminar_categoria(cat_id):
     supabase.table("categorias").delete().eq("id", cat_id).execute()
 
 # ─────────────────────────────────────────────
-# HELPERS — PRODUCTOS (MIGRADO A SUPABASE)
+# HELPERS — PRODUCTOS
 # ─────────────────────────────────────────────
 def get_productos():
     response = supabase.table("productos").select("*").order("descripcion").execute()
@@ -71,7 +69,6 @@ def get_producto_by_nombre(nombre):
     nombre = str(nombre).strip()
     if not nombre or nombre in ("nan", "None", ""):
         return None
-    # Búsqueda ilike para que no importe mayúsculas/minúsculas
     response = supabase.table("productos").select("*").ilike("descripcion", nombre).execute()
     return response.data[0] if response.data else None
 
@@ -115,7 +112,7 @@ def upsert_producto(cod, desc, cat, precio, stock_delta):
         }).eq("cod_prod", cod).execute()
 
 # ─────────────────────────────────────────────
-# HELPERS — OPERACIONES (MIGRADO A SUPABASE)
+# HELPERS — OPERACIONES
 # ─────────────────────────────────────────────
 def registrar_operacion(id_op, tipo, fecha, cod, desc, cat, cantidad, precio, subtotal, factura, obs):
     supabase.table("operaciones").insert({
@@ -133,7 +130,6 @@ def registrar_operacion(id_op, tipo, fecha, cod, desc, cat, cantidad, precio, su
     }).execute()
 
 def get_operaciones():
-    # Traemos las operaciones ordenadas de forma descendente por fecha
     response = supabase.table("operaciones").select("*").order("fecha", desc=True).execute()
     if response.data:
         return pd.DataFrame(response.data)
@@ -145,8 +141,9 @@ def get_operaciones():
 # ─────────────────────────────────────────────
 # CONTROLADOR DE PLANILLA
 # ─────────────────────────────────────────────
+# Cambiamos None por texto vacío "" para erradicar el texto flotante indeseado
 EMPTY_OP_ROW = {
-    "COD_PROD": "", "PRODUCTO": None, "CANTIDAD": 1,
+    "COD_PROD": "", "PRODUCTO": "", "CANTIDAD": 1,
     "PRECIO_UNITARIO": 0.0, "TOTAL": 0.0, "OBSERVACIONES": ""
 }
 
@@ -174,7 +171,8 @@ def callback_planilla(suffix: str):
             df.at[idx, col] = val
         
         cod = str(df.at[idx, "COD_PROD"]).strip()
-        nombre = str(df.at[idx, "PRODUCTO"]).strip() if df.at[idx, "PRODUCTO"] else ""
+        val_prod = df.at[idx, "PRODUCTO"]
+        nombre = str(val_prod).strip() if pd.notna(val_prod) and str(val_prod).strip() not in ("None", "") else ""
 
         prod = None
         if "COD_PROD" in column_changes and cod:
@@ -212,9 +210,8 @@ def build_op_col_config():
         "COD_PROD":        st.column_config.TextColumn("Código",            width="small"),
         "PRODUCTO":        st.column_config.SelectboxColumn("Producto",      options=opciones_prod, width="large"),
         "CANTIDAD":        st.column_config.NumberColumn("Cantidad",         min_value=1, step=1, width="small"),
-        # Agregamos format="$,.2f" para miles con punto y decimales con coma en español europeo/latino dentro de Streamlit
-        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="$,.2f", width="medium"),
-        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="$,.2f", width="medium"),
+        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="%.2f", width="medium"),
+        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="%.2f", width="medium"),
         "OBSERVACIONES":   st.column_config.TextColumn("Observaciones",      width="medium"),
     }
 
@@ -235,7 +232,7 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────
-# CONTROL DE SESIÓN COPIADO EN COOKIES
+# CONTROL DE SESIÓN
 # ─────────────────────────────────────────────
 user_cookie = cookie_manager.get(cookie="logged_in_user")
 
@@ -358,7 +355,8 @@ if seccion == "🛒 OPERACIONES":
 
                 registrar_operacion(id_op, tab_tipo, fecha, cod, desc, cat, cant, prec, tot, con_factura, obs)
 
-            st.success(f"✅ {tab_tipo} confirmada con éxito. Nro Ticket: **{id_op}** | Total: **${total_general:,.2f}**")
+            total_msg = f"${total_general:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            st.success(f"✅ {tab_tipo} confirmada con éxito. Nro Ticket: **{id_op}** | Total: **{total_msg}**")
             st.session_state[df_key] = new_op_df()
             st.rerun()
 
@@ -367,9 +365,9 @@ if seccion == "🛒 OPERACIONES":
     with tab_compras:
         render_op_tab("Compra")
 
-# ══════════════════════════════════════════════
+# ─────────────────────────────────────────────
 # HISTORIAL
-# ══════════════════════════════════════════════
+# ─────────────────────────────────────────────
 elif seccion == "📊 HISTORIAL":
     st.title("📊 Historial de Operaciones")
     operaciones_df = get_operaciones()
@@ -380,7 +378,7 @@ elif seccion == "📊 HISTORIAL":
 
     st.markdown("#### 🔍 Filtros")
     f1, f2, f3 = st.columns(3)
-    filtro_tipo    = f1.selectbox("Tipo",    ["Todos", "Venta", "Compra"])
+    filto_tipo    = f1.selectbox("Tipo",    ["Todos", "Venta", "Compra"])
     filtro_factura = f2.selectbox("Factura", ["Todos", "Con Factura", "Sin Factura"])
     cats_ops       = ["Todos"] + sorted(operaciones_df["categoria"].dropna().unique().tolist())
     filtro_cat     = f3.selectbox("Categoría", cats_ops)
@@ -397,7 +395,7 @@ elif seccion == "📊 HISTORIAL":
     filtro_texto  = fd3.text_input("Buscar código o descripción")
     st.markdown("---")
 
-    if filtro_tipo    != "Todos":         df_f = df_f[df_f["tipo"] == filtro_tipo]
+    if filto_tipo    != "Todos":         df_f = df_f[df_f["tipo"] == filto_tipo]
     if filtro_factura == "Con Factura":   df_f = df_f[df_f["con_factura"] == 1]
     elif filtro_factura == "Sin Factura": df_f = df_f[df_f["con_factura"] == 0]
     if filtro_cat     != "Todos":         df_f = df_f[df_f["categoria"]   == filtro_cat]
@@ -410,10 +408,16 @@ elif seccion == "📊 HISTORIAL":
         
     df_f = df_f.drop(columns=["_fecha_dt"], errors="ignore")
 
+    # Formateo manual regional para las métricas
+    total_v = df_f[df_f['tipo']=='Venta']['subtotal'].sum()
+    total_c = df_f[df_f['tipo']=='Compra']['subtotal'].sum()
+    v_formateado = f"${total_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    c_formateado = f"${total_c:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Operaciones",       len(df_f))
-    m2.metric("Total Ventas ($)",  f"{df_f[df_f['tipo']=='Venta']['subtotal'].sum():,.2f}")
-    m3.metric("Total Compras ($)", f"{df_f[df_f['tipo']=='Compra']['subtotal'].sum():,.2f}")
+    m2.metric("Total Ventas ($)",  v_formateado)
+    m3.metric("Total Compras ($)", c_formateado)
     m4.metric("Con Factura",       len(df_f[df_f["con_factura"] == 1]))
     st.markdown("---")
 
@@ -432,12 +436,30 @@ elif seccion == "📊 HISTORIAL":
             "cantidad": "Cantidad", "precio_unitario": "Precio Unitario",
             "subtotal": "Subtotal", "con_factura": "Factura", "observaciones": "Observaciones"
         })
-        st.dataframe(disp, use_container_width=True, hide_index=True)
         
-        # Generamos el archivo de Excel en memoria
+        # Mostramos la tabla formateada visualmente en Streamlit
+        st.dataframe(
+            disp, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Precio Unitario": st.column_config.NumberColumn(format="%.2f"),
+                "Subtotal": st.column_config.NumberColumn(format="%.2f")
+            }
+        )
+        
+        # Generamos el archivo de Excel en memoria inyectando el formato contable nativo
         buf_hist = io.BytesIO()
         with pd.ExcelWriter(buf_hist, engine="openpyxl") as writer:
             disp.to_excel(writer, index=False, sheet_name="Historial")
+            
+            workbook  = writer.book
+            worksheet = writer.sheets["Historial"]
+            formato_moneda = "$#,##0.00;($#,##0.00);\"-\";@" 
+            
+            for row in range(2, len(disp) + 2):
+                worksheet[f"I{row}"].number_format = formato_moneda
+                worksheet[f"J{row}"].number_format = formato_moneda
             
         st.download_button(
             "📥 Exportar historial a Excel",
@@ -446,9 +468,9 @@ elif seccion == "📊 HISTORIAL":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-# ══════════════════════════════════════════════
+# ─────────────────────────────────────────────
 # INVENTARIO
-# ══════════════════════════════════════════════
+# ─────────────────────────────────────────────
 elif seccion == "📋 INVENTARIO":
     st.title("📋 Base de Datos de Productos")
 
@@ -474,14 +496,31 @@ elif seccion == "📋 INVENTARIO":
                 "cod_prod": "Código", "descripcion": "Descripción",
                 "categoria": "Categoría", "valor_unitario": "Precio Unitario", "cantidad": "Stock"
             })
-            # Reordenamos las columnas visuales para que coincida con el formato original
             column_order = ["Código", "Descripción", "Categoría", "Precio Unitario", "Stock"]
             disp_inv = disp_inv[[c for c in column_order if c in disp_inv.columns]]
-            st.dataframe(disp_inv, use_container_width=True, hide_index=True)
+            
+            # Formato visual correcto en la interfaz
+            st.dataframe(
+                disp_inv, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Precio Unitario": st.column_config.NumberColumn(format="%.2f")
+                }
+            )
 
+            # Generamos Excel inyectando formato contable nativo
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 disp_inv.to_excel(writer, index=False, sheet_name="Inventario")
+                
+                workbook = writer.book
+                worksheet = writer.sheets["Inventario"]
+                formato_moneda = "$#,##0.00;($#,##0.00);\"-\";@"
+                
+                for row in range(2, len(disp_inv) + 2):
+                    worksheet[f"D{row}"].number_format = formato_moneda
+                    
             st.download_button(
                 "📥 Exportar inventario a Excel",
                 data=buf.getvalue(),
