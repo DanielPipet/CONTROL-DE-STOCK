@@ -1,180 +1,150 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import date, datetime
 import uuid
 import io
+import extra_streamlit_components as stx
+from supabase import create_client
 
 # ─────────────────────────────────────────────
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # ─────────────────────────────────────────────
-DB_PATH    = "inventario.db"
 USUARIO    = "admin"
 CONTRASENA = "control2026"
 
 st.set_page_config(page_title="Control de Stock", page_icon="📦", layout="wide")
 
-# ─────────────────────────────────────────────
-# BASE DE DATOS
-# ─────────────────────────────────────────────
-def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+# Inicializamos el manejador de cookies para persistencia de sesión
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
 
-def init_db():
-    with get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS categorias (
-                id     INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT UNIQUE NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS productos (
-                cod_prod       TEXT PRIMARY KEY,
-                descripcion    TEXT NOT NULL,
-                categoria      TEXT,
-                valor_unitario REAL DEFAULT 0,
-                cantidad       INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS operaciones (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_operacion    TEXT,
-                tipo            TEXT NOT NULL,
-                fecha           TEXT NOT NULL,
-                cod_prod        TEXT NOT NULL,
-                descripcion     TEXT NOT NULL,
-                categoria       TEXT,
-                cantidad        INTEGER NOT NULL,
-                precio_unitario REAL NOT NULL,
-                subtotal        REAL NOT NULL,
-                con_factura     INTEGER NOT NULL DEFAULT 0,
-                observaciones   TEXT
-            )
-        """)
-        # Migración segura
-        try:
-            conn.execute("ALTER TABLE operaciones ADD COLUMN id_operacion TEXT")
-        except Exception:
-            pass
-        try:
-            rows = conn.execute(
-                "SELECT DISTINCT categoria FROM productos WHERE categoria IS NOT NULL AND TRIM(categoria) != ''"
-            ).fetchall()
-            for (cat,) in rows:
-                conn.execute("INSERT OR IGNORE INTO categorias (nombre) VALUES (?)", (cat.strip(),))
-        except Exception:
-            pass
-        conn.commit()
-
-init_db()
+cookie_manager = get_cookie_manager()
 
 # ─────────────────────────────────────────────
-# HELPERS — CATEGORÍAS
+# CONEXIÓN CON SUPABASE
+# ─────────────────────────────────────────────
+# Los datos reales se leen de los Secrets de Streamlit de forma segura
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_supabase()
+
+# ─────────────────────────────────────────────
+# HELPERS — CATEGORÍAS (MIGRADO A SUPABASE)
 # ─────────────────────────────────────────────
 def get_categorias():
-    with get_conn() as conn:
-        return pd.read_sql("SELECT * FROM categorias ORDER BY nombre", conn)
+    response = supabase.table("categorias").select("*").order("nombre").execute()
+    if response.data:
+        return pd.DataFrame(response.data)
+    return pd.DataFrame(columns=["id", "nombre"])
 
 def agregar_categoria(nombre):
-    with get_conn() as conn:
-        conn.execute("INSERT OR IGNORE INTO categorias (nombre) VALUES (?)", (nombre.strip(),))
-        conn.commit()
+    nombre_limpio = nombre.strip()
+    # Verificar si ya existe para evitar errores de restricción UNIQUE
+    check = supabase.table("categorias").select("id").eq("nombre", nombre_limpio).execute()
+    if not check.data:
+        supabase.table("categorias").insert({"nombre": nombre_limpio}).execute()
 
 def eliminar_categoria(cat_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM categorias WHERE id = ?", (cat_id,))
-        conn.commit()
+    supabase.table("categorias").delete().eq("id", cat_id).execute()
 
 # ─────────────────────────────────────────────
-# HELPERS — PRODUCTOS
+# HELPERS — PRODUCTOS (MIGRADO A SUPABASE)
 # ─────────────────────────────────────────────
 def get_productos():
-    with get_conn() as conn:
-        return pd.read_sql("SELECT * FROM productos ORDER BY descripcion", conn)
+    response = supabase.table("productos").select("*").order("descripcion").execute()
+    if response.data:
+        return pd.DataFrame(response.data)
+    return pd.DataFrame(columns=["cod_prod", "descripcion", "categoria", "valor_unitario", "cantidad"])
 
 def get_producto(cod):
     cod = str(cod).strip()
     if not cod or cod in ("nan", "None", ""):
         return None
-    with get_conn() as conn:
-        df = pd.read_sql("SELECT * FROM productos WHERE cod_prod = ?", conn, params=(cod,))
-        return df.iloc[0] if not df.empty else None
+    response = supabase.table("productos").select("*").eq("cod_prod", cod).execute()
+    return response.data[0] if response.data else None
 
 def get_producto_by_nombre(nombre):
     nombre = str(nombre).strip()
     if not nombre or nombre in ("nan", "None", ""):
         return None
-    with get_conn() as conn:
-        df = pd.read_sql(
-            "SELECT * FROM productos WHERE LOWER(descripcion) = LOWER(?)",
-            conn, params=(nombre,)
-        )
-        return df.iloc[0] if not df.empty else None
+    # Búsqueda ilike para que no importe mayúsculas/minúsculas
+    response = supabase.table("productos").select("*").ilike("descripcion", nombre).execute()
+    return response.data[0] if response.data else None
 
 def agregar_producto(cod, desc, cat, precio, cantidad):
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO productos (cod_prod, descripcion, categoria, valor_unitario, cantidad) VALUES (?,?,?,?,?)",
-            (cod, desc, cat, precio, cantidad)
-        )
-        conn.commit()
+    supabase.table("productos").insert({
+        "cod_prod": str(cod).strip(),
+        "descripcion": str(desc).strip(),
+        "categoria": str(cat).strip(),
+        "valor_unitario": float(precio),
+        "cantidad": int(cantidad)
+    }).execute()
 
 def editar_producto(cod, desc, cat, precio, cantidad):
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE productos SET descripcion=?, categoria=?, valor_unitario=?, cantidad=? WHERE cod_prod=?",
-            (desc, cat, precio, cantidad, cod)
-        )
-        conn.commit()
+    supabase.table("productos").update({
+        "descripcion": str(desc).strip(),
+        "categoria": str(cat).strip(),
+        "valor_unitario": float(precio),
+        "cantidad": int(cantidad)
+    }).eq("cod_prod", str(cod).strip()).execute()
 
 def actualizar_stock(cod, delta):
-    with get_conn() as conn:
-        conn.execute("UPDATE productos SET cantidad = cantidad + ? WHERE cod_prod = ?", (delta, cod))
-        conn.commit()
+    prod = get_producto(cod)
+    if prod:
+        nueva_cantidad = int(prod["cantidad"]) + int(delta)
+        supabase.table("productos").update({"cantidad": nueva_cantidad}).eq("cod_prod", cod).execute()
 
 def actualizar_precio(cod, nuevo_precio):
-    with get_conn() as conn:
-        conn.execute("UPDATE productos SET valor_unitario = ? WHERE cod_prod = ?", (nuevo_precio, cod))
-        conn.commit()
+    supabase.table("productos").update({"valor_unitario": float(nuevo_precio)}).eq("cod_prod", cod).execute()
 
 def upsert_producto(cod, desc, cat, precio, stock_delta):
-    with get_conn() as conn:
-        existing = pd.read_sql("SELECT 1 FROM productos WHERE cod_prod = ?", conn, params=(cod,))
-        if existing.empty:
-            conn.execute(
-                "INSERT INTO productos (cod_prod, descripcion, categoria, valor_unitario, cantidad) VALUES (?,?,?,?,?)",
-                (cod, desc, cat, precio, stock_delta)
-            )
-        else:
-            conn.execute(
-                "UPDATE productos SET descripcion=?, categoria=?, valor_unitario=?, cantidad=cantidad+? WHERE cod_prod=?",
-                (desc, cat, precio, stock_delta, cod)
-            )
-        conn.commit()
+    prod = get_producto(cod)
+    if not prod:
+        agregar_producto(cod, desc, cat, precio, stock_delta)
+    else:
+        nueva_cantidad = int(prod["cantidad"]) + int(stock_delta)
+        supabase.table("productos").update({
+            "descripcion": str(desc).strip(),
+            "categoria": str(cat).strip(),
+            "valor_unitario": float(precio),
+            "cantidad": nueva_cantidad
+        }).eq("cod_prod", cod).execute()
 
 # ─────────────────────────────────────────────
-# HELPERS — OPERACIONES
+# HELPERS — OPERACIONES (MIGRADO A SUPABASE)
 # ─────────────────────────────────────────────
 def registrar_operacion(id_op, tipo, fecha, cod, desc, cat, cantidad, precio, subtotal, factura, obs):
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO operaciones
-               (id_operacion,tipo,fecha,cod_prod,descripcion,categoria,
-                cantidad,precio_unitario,subtotal,con_factura,observaciones)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (id_op, tipo, str(fecha), cod, desc, cat,
-             cantidad, precio, subtotal, 1 if factura else 0, obs)
-        )
-        conn.commit()
+    supabase.table("operaciones").insert({
+        "id_operacion": id_op,
+        "tipo": tipo,
+        "fecha": str(fecha),
+        "cod_prod": cod,
+        "descripcion": desc,
+        "categoria": cat,
+        "cantidad": int(cantidad),
+        "precio_unitario": float(precio),
+        "subtotal": float(subtotal),
+        "con_factura": 1 if factura else 0,
+        "observaciones": obs
+    }).execute()
 
 def get_operaciones():
-    with get_conn() as conn:
-        return pd.read_sql("SELECT * FROM operaciones ORDER BY fecha DESC, id DESC", conn)
+    # Traemos las operaciones ordenadas de forma descendente por fecha
+    response = supabase.table("operaciones").select("*").order("fecha", descending=True).execute()
+    if response.data:
+        return pd.DataFrame(response.data)
+    return pd.DataFrame(columns=[
+        "id", "id_operacion", "tipo", "fecha", "cod_prod", "descripcion", 
+        "categoria", "cantidad", "precio_unitario", "subtotal", "con_factura", "observaciones"
+    ])
 
 # ─────────────────────────────────────────────
-# CONTROLADOR DE PLANILLA (DATA EDITOR OPTIMIZADO)
+# CONTROLADOR DE PLANILLA
 # ─────────────────────────────────────────────
 EMPTY_OP_ROW = {
     "COD_PROD": "", "PRODUCTO": None, "CANTIDAD": 1,
@@ -185,7 +155,6 @@ def new_op_df():
     return pd.DataFrame([EMPTY_OP_ROW.copy()])
 
 def callback_planilla(suffix: str):
-    """Maneja cambios en la planilla de forma nativa sin generar bucles infinitos."""
     state_key = f"op_editor_{suffix}"
     df_key = "op_df_ventas" if suffix == "ventas" else "op_df_compras"
     
@@ -195,19 +164,16 @@ def callback_planilla(suffix: str):
     edits = st.session_state[state_key]
     df = st.session_state[df_key].copy()
 
-    # 1. Filas Agregadas
     for row in edits.get("added_rows", []):
         new_row = EMPTY_OP_ROW.copy()
         new_row.update(row)
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
-    # 2. Filas Editadas
     for idx_str, column_changes in edits.get("edited_rows", {}).items():
         idx = int(idx_str)
         for col, val in column_changes.items():
             df.at[idx, col] = val
         
-        # Lógica de Autocompletado reactivo por Código o Nombre
         cod = str(df.at[idx, "COD_PROD"]).strip()
         nombre = str(df.at[idx, "PRODUCTO"]).strip() if df.at[idx, "PRODUCTO"] else ""
 
@@ -222,7 +188,6 @@ def callback_planilla(suffix: str):
             df.at[idx, "PRODUCTO"] = str(prod["descripcion"])
             df.at[idx, "PRECIO_UNITARIO"] = float(prod["valor_unitario"])
 
-        # Recálculo de Subtotales
         cant = df.at[idx, "CANTIDAD"]
         try:
             cant = max(int(cant), 1)
@@ -232,7 +197,6 @@ def callback_planilla(suffix: str):
         precio = float(df.at[idx, "PRECIO_UNITARIO"])
         df.at[idx, "TOTAL"] = round(cant * precio, 2)
 
-    # 3. Filas Eliminadas
     deleted_indices = edits.get("deleted_rows", [])
     if deleted_indices:
         df = df.drop(deleted_indices).reset_index(drop=True)
@@ -271,8 +235,13 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ─────────────────────────────────────────────
-# LOGIN
+# CONTROL DE SESIÓN COPIADO EN COOKIES
 # ─────────────────────────────────────────────
+user_cookie = cookie_manager.get(cookie="logged_in_user")
+
+if user_cookie == "admin":
+    st.session_state.logged_in = True
+
 def pantalla_login():
     _, col, _ = st.columns([1, 2, 1])
     with col:
@@ -284,6 +253,7 @@ def pantalla_login():
         if st.button("Ingresar", use_container_width=True):
             if usr == USUARIO and pwd == CONTRASENA:
                 st.session_state.logged_in = True
+                cookie_manager.set(cookie="logged_in_user", val="admin", expires_at=datetime.now() + pd.Timedelta(days=30))
                 st.rerun()
             else:
                 st.error("❌ Usuario o contraseña incorrectos.")
@@ -298,103 +268,99 @@ if not st.session_state.logged_in:
 with st.sidebar:
     st.markdown("## 📦 Control de Stock")
     st.markdown("---")
-    seccion = st.radio(
-        "Menú",
-        ["🛒 OPERACIONES", "📊 HISTORIAL", "📋 INVENTARIO"],
-        label_visibility="collapsed"
-    )
+    seccion = st.radio("Menú", ["🛒 OPERACIONES", "📊 HISTORIAL", "📋 INVENTARIO"], label_visibility="collapsed")
     st.markdown("---")
     if st.button("🚪 Cerrar Sesión"):
         st.session_state.logged_in = False
+        cookie_manager.delete(cookie="logged_in_user")
         st.rerun()
 
 # ══════════════════════════════════════════════
 # OPERACIONES
 # ══════════════════════════════════════════════
-def render_op_tab(tab_tipo: str):
-    suffix   = "ventas" if tab_tipo == "Venta" else "compras"
-    df_key   = f"op_df_{suffix}"
-
-    col_fecha, col_fac = st.columns([2, 2])
-    fecha = col_fecha.date_input("Fecha", value=date.today(), format="DD/MM/YYYY", key=f"fecha_{suffix}")
-    col_fac.write(" ")
-    con_factura = col_fac.checkbox("Con Factura ✔️", key=f"factura_{suffix}")
-
-    st.markdown("---")
-    st.caption("✏️ Seleccioná el **Producto** desde el menú desplegable o escribí el **Código** — los totales se calculan al instante.")
-
-    # El editor ahora actualiza de manera segura mediante on_change sin romper hilos
-    st.data_editor(
-        st.session_state[df_key],
-        column_config=build_op_col_config(),
-        num_rows="dynamic",
-        use_container_width=True,
-        key=f"op_editor_{suffix}",
-        on_change=callback_planilla,
-        args=(suffix,)
-    )
-
-    current_df = st.session_state[df_key]
-    valid_rows = current_df[(current_df["COD_PROD"] != "") & (current_df["TOTAL"] > 0)]
-    total_general = valid_rows["TOTAL"].sum()
-
-    col_tot, col_btn = st.columns([3, 1])
-    col_tot.markdown(f"## 💰 Total General: **${total_general:,.2f}**")
-    
-    if col_btn.button("🗑️ Limpiar planilla", key=f"limpiar_{suffix}"):
-        st.session_state[df_key] = new_op_df()
-        st.rerun()
-
-    st.markdown("---")
-
-    if st.button(f"✅ Confirmar {tab_tipo}", use_container_width=True, key=f"confirmar_{suffix}"):
-        filas = valid_rows.copy()
-        if filas.empty:
-            st.error("❌ No hay productos válidos cargados en la planilla.")
-            return
-
-        errores = []
-        if tab_tipo == "Venta":
-            for _, row in filas.iterrows():
-                prod = get_producto(str(row["COD_PROD"]))
-                if prod is None:
-                    errores.append(f"Código '{row['COD_PROD']}' no existe en el inventario.")
-                elif int(row["CANTIDAD"]) > int(prod["cantidad"]):
-                    errores.append(f"'{row['PRODUCTO']}': Stock insuficiente (Disponible: {int(prod['cantidad'])}, Requerido: {int(row['CANTIDAD'])}).")
-        
-        if errores:
-            for e in errores:
-                st.error(f"❌ {e}")
-            return
-
-        # ID de Operación unificado para toda la orden de compra/venta
-        id_op = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:4].upper()
-        
-        for _, row in filas.iterrows():
-            cod   = str(row["COD_PROD"])
-            desc  = str(row["PRODUCTO"])
-            cant  = int(row["CANTIDAD"])
-            prec  = float(row["PRECIO_UNITARIO"])
-            tot   = float(row["TOTAL"])
-            obs   = str(row["OBSERVACIONES"]) if str(row["OBSERVACIONES"]) not in ("nan","None","") else ""
-            
-            prod  = get_producto(cod)
-            cat   = str(prod["categoria"]) if prod is not None else ""
-
-            delta = -cant if tab_tipo == "Venta" else cant
-            actualizar_stock(cod, delta)
-            if tab_tipo == "Compra":
-                actualizar_precio(cod, prec)
-
-            registrar_operacion(id_op, tab_tipo, fecha, cod, desc, cat, cant, prec, tot, con_factura, obs)
-
-        st.success(f"✅ {tab_tipo} confirmada con éxito. Nro Ticket: **{id_op}** | Total: **${total_general:,.2f}**")
-        st.session_state[df_key] = new_op_df()
-        st.rerun()
-
 if seccion == "🛒 OPERACIONES":
     st.title("🛒 Operaciones")
     tab_ventas, tab_compras = st.tabs(["🧾 Ventas", "📥 Compras"])
+    
+    def render_op_tab(tab_tipo: str):
+        suffix   = "ventas" if tab_tipo == "Venta" else "compras"
+        df_key   = f"op_df_{suffix}"
+
+        col_fecha, col_fac = st.columns([2, 2])
+        fecha = col_fecha.date_input("Fecha", value=date.today(), format="DD/MM/YYYY", key=f"fecha_{suffix}")
+        col_fac.write(" ")
+        con_factura = col_fac.checkbox("Con Factura ✔️", key=f"factura_{suffix}")
+
+        st.markdown("---")
+        st.caption("✏️ Seleccioná el **Producto** desde el menú desplegable o escribí el **Código** — los totales se calculan al instante.")
+
+        st.data_editor(
+            st.session_state[df_key],
+            column_config=build_op_col_config(),
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"op_editor_{suffix}",
+            on_change=callback_planilla,
+            args=(suffix,)
+        )
+
+        current_df = st.session_state[df_key]
+        valid_rows = current_df[(current_df["COD_PROD"] != "") & (current_df["TOTAL"] > 0)]
+        total_general = valid_rows["TOTAL"].sum()
+
+        col_tot, col_btn = st.columns([3, 1])
+        col_tot.markdown(f"## 💰 Total General: **${total_general:,.2f}**")
+        
+        if col_btn.button("🗑️ Limpiar planilla", key=f"limpiar_{suffix}"):
+            st.session_state[df_key] = new_op_df()
+            st.rerun()
+
+        st.markdown("---")
+
+        if st.button(f"✅ Confirmar {tab_tipo}", use_container_width=True, key=f"confirmar_{suffix}"):
+            filas = valid_rows.copy()
+            if filas.empty:
+                st.error("❌ No hay productos válidos cargados en la planilla.")
+                return
+
+            errores = []
+            if tab_tipo == "Venta":
+                for _, row in filas.iterrows():
+                    prod = get_producto(str(row["COD_PROD"]))
+                    if prod is None:
+                        errores.append(f"Código '{row['COD_PROD']}' no existe en el inventario.")
+                    elif int(row["CANTIDAD"]) > int(prod["cantidad"]):
+                        errores.append(f"'{row['PRODUCTO']}': Stock insuficiente (Disponible: {int(prod['cantidad'])}, Requerido: {int(row['CANTIDAD'])}).")
+            
+            if errores:
+                for e in errores:
+                    st.error(f"❌ {e}")
+                return
+
+            id_op = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:4].upper()
+            
+            for _, row in filas.iterrows():
+                cod   = str(row["COD_PROD"])
+                desc  = str(row["PRODUCTO"])
+                cant  = int(row["CANTIDAD"])
+                prec  = float(row["PRECIO_UNITARIO"])
+                tot   = float(row["TOTAL"])
+                obs   = str(row["OBSERVACIONES"]) if str(row["OBSERVACIONES"]) not in ("nan","None","") else ""
+                
+                prod  = get_producto(cod)
+                cat   = str(prod["categoria"]) if prod is not None else ""
+
+                delta = -cant if tab_tipo == "Venta" else cant
+                actualizar_stock(cod, delta)
+                if tab_tipo == "Compra":
+                    actualizar_precio(cod, prec)
+
+                registrar_operacion(id_op, tab_tipo, fecha, cod, desc, cat, cant, prec, tot, con_factura, obs)
+
+            st.success(f"✅ {tab_tipo} confirmada con éxito. Nro Ticket: **{id_op}** | Total: **${total_general:,.2f}**")
+            st.session_state[df_key] = new_op_df()
+            st.rerun()
+
     with tab_ventas:
         render_op_tab("Venta")
     with tab_compras:
@@ -489,7 +455,6 @@ elif seccion == "📋 INVENTARIO":
         ["📄 Ver Inventario", "➕ Agregar Producto", "✏️ Editar Producto", "🏷️ Categorías"]
     )
 
-    # ── Ver ──
     with tab_ver:
         if productos_df.empty:
             st.info("No hay productos registrados todavía.")
@@ -498,6 +463,9 @@ elif seccion == "📋 INVENTARIO":
                 "cod_prod": "Código", "descripcion": "Descripción",
                 "categoria": "Categoría", "valor_unitario": "Precio Unitario", "cantidad": "Stock"
             })
+            # Reordenamos las columnas visuales para que coincida con el formato original
+            column_order = ["Código", "Descripción", "Categoría", "Precio Unitario", "Stock"]
+            disp_inv = disp_inv[[c for c in column_order if c in disp_inv.columns]]
             st.dataframe(disp_inv, use_container_width=True, hide_index=True)
 
             buf = io.BytesIO()
@@ -510,7 +478,6 @@ elif seccion == "📋 INVENTARIO":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-    # ── Agregar (Con selector maestro de categorías) ──
     with tab_add:
         ak = st.session_state.inv_add_key
         with st.form(f"form_agregar_{ak}"):
@@ -541,7 +508,6 @@ elif seccion == "📋 INVENTARIO":
                     st.session_state.inv_add_key += 1
                     st.rerun()
 
-    # ── Editar (Con selector maestro de categorías) ──
     with tab_edit:
         ek = st.session_state.inv_edit_key
         productos_df2 = get_productos()
@@ -580,7 +546,6 @@ elif seccion == "📋 INVENTARIO":
                             st.session_state.inv_edit_key += 1
                             st.rerun()
 
-    # ── Categorías ──
     with tab_cats:
         ck = st.session_state.inv_cat_key
         st.subheader("🏷️ Gestión de Categorías")
@@ -616,7 +581,6 @@ elif seccion == "📋 INVENTARIO":
                         st.session_state.inv_cat_key += 1
                         st.rerun()
 
-    # ── Carga Masiva ──
     st.markdown("---")
     with st.expander("📦 Carga Masiva desde Excel o CSV"):
         st.markdown(
