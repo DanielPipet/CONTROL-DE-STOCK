@@ -212,8 +212,9 @@ def build_op_col_config():
         "COD_PROD":        st.column_config.TextColumn("Código",            width="small"),
         "PRODUCTO":        st.column_config.SelectboxColumn("Producto",      options=opciones_prod, width="large"),
         "CANTIDAD":        st.column_config.NumberColumn("Cantidad",         min_value=1, step=1, width="small"),
-        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="%.2f", width="medium"),
-        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="%.2f", width="medium"),
+        # Agregamos format="$,.2f" para miles con punto y decimales con coma en español europeo/latino dentro de Streamlit
+        "PRECIO_UNITARIO": st.column_config.NumberColumn("Precio Unit. ($)", disabled=True, format="$,.2f", width="medium"),
+        "TOTAL":           st.column_config.NumberColumn("Total ($)",        disabled=True, format="$,.2f", width="medium"),
         "OBSERVACIONES":   st.column_config.TextColumn("Observaciones",      width="medium"),
     }
 
@@ -308,7 +309,8 @@ if seccion == "🛒 OPERACIONES":
         total_general = valid_rows["TOTAL"].sum()
 
         col_tot, col_btn = st.columns([3, 1])
-        col_tot.markdown(f"## 💰 Total General: **${total_general:,.2f}**")
+        total_formateado = f"${total_general:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        col_tot.markdown(f"## 💰 Total General: **{total_formateado}**")
         
         if col_btn.button("🗑️ Limpiar planilla", key=f"limpiar_{suffix}"):
             st.session_state[df_key] = new_op_df()
